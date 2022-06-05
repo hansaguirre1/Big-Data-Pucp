@@ -1,0 +1,91 @@
+---
+title: "Trabajo 2"
+author: "Luis Rodrigo Alamo Ramos"
+date: '2022-06-05'
+output: 
+  rmdformats::downcute:
+  code_folding: show
+  self_contained: true
+  thumbnails: false
+  lightbox: true
+pkgdown:
+  as_is: true
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE, warning=FALSE, comment=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(haven)
+library(tidyverse)
+library(dplyr)
+library(survey)
+```
+
+Creación de la variable pp_dcsp:
+
+```{r}
+dataset = read_sav('01_PENALES_CARATULA.sav')
+dataset$pp_dcsp = ifelse(dataset$DELITO_GENERICO == 'DELITOS CONTRA LA SEGURIDAD PUBLICA',1,0)
+```
+
+Para la estratificación, se genera una variable de tamaño de centro penitenciario según la cantidad de internos.
+```{r}
+internos = dataset %>% count(EST_PENIT_COD)
+names(internos)[names(internos) == 'n'] <- 'internos'
+dataset = merge(x=dataset, y=internos, by=c('EST_PENIT_COD'),all.x=TRUE) 
+dataset = dataset %>% mutate(tamano = cut(internos, unique(quantile(internos, seq(0, 1, 0.15))), labels = FALSE))
+```
+
+Muestra aleatoria estratificada:
+
+```{r}
+set.seed(21031997)
+mae1 = dataset %>% group_by(tamano) %>% slice_sample(prop=0.6)
+```
+
+Dado que el censo se encuentra a nivel de interno y solo tenemos 76 mil observaciones, la MAE representará una proporción del 60% del censo.
+El hecho de tener observaciones a nivel de internos hace necesario que el proceso de incluir conglomerados al muestreo sea de dos etapas. La primera etapa consta en seleccionar una muestra aleatoria utlizando los centros penitenciarios como unidades primarias de muestreo (recordemos que la estratificación se realiza según el tamaño de los centros; entonces, los centros que se encuentran en un estrato ya no estarán presentes en los otros, hecho que facilita nuestro análisis).
+
+```{r}
+clusters = mae1 %>% count(EST_PENIT_COD)
+clusters$tamano = NULL
+mac1_clusters = clusters %>% slice_sample(prop=0.4)
+mac1_f = merge(mae1, mac1_clusters, by=c('EST_PENIT_COD'))
+```
+
+Aquí vemos que pasamos de 65 clusters totales a 26 seleccionados aleatoriamente, luego realizamos la segunda etapa a nivel individual y nos quedamos con el 15% de la muestra para cumplir con el requisito de que la muestra estratificada y por conglomerados no supere el 5% de la población del censo. 
+
+```{r}
+mac2_f = mac1_f %>% group_by(EST_PENIT_COD) %>% slice_sample(prop=0.15)
+```
+
+Entre las otras variables que pudieron ser utilizadas en este proceso tenemos; por ejemplo, región como estrato y distrito como unidad primaria de muestreo en el conglomerado. También podimos utilizar genero como estrato y centro penitenciario unidad primaria de muestreo en el conglomerado ya que un centro penitenciario para mujeres no estaría dentro del mismo estrato de los centros penitenciarios para hombres
+
+Diseño Muestral para una muestra estratificada y por conglomerados en dos etapas:
+```{r}
+set.seed(21031997)
+options(survey.adjust.domain.lonely=TRUE)
+options(survey.lonely.psu="adjust")
+
+mac2_f = mac2_f %>% mutate(fpc1 = 65, fpc2 = n, .keep = "all") 
+mac2_f_d = svydesign(id = ~EST_PENIT_COD+INTERNO_ID , fpc = ~fpc1+fpc2 , data = mac2_f, strata = ~tamano)
+```
+
+Porcentaje y total de personas que hayan cometido un delito contra la seguridad pública (pp_dcsp == 1):
+
+```{r}
+svymean(~pp_dcsp, mac2_f_d)
+svytotal(~pp_dcsp, mac2_f_d)
+```
+
+
+
+
+
